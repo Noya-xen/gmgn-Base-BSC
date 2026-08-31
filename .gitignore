@@ -1,0 +1,4 @@
+telegram.env
+.env
+*.log
+__pycache__/

@@ -1,0 +1,8 @@
+{
+  "name": "gmgn-bsc-base-radar",
+  "schedule": "*/5 * * * *",
+  "script": "gmgn-dlmm-radar.py",
+  "no_agent": true,
+  "deliver": "local",
+  "repeat": "forever"
+}
