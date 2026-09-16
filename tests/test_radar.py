@@ -11,7 +11,7 @@ SPEC.loader.exec_module(RADAR)
 
 class RadarTests(unittest.TestCase):
     def test_chain_commands_use_evm_gates(self):
-        for chain in ("bsc", "base"):
+        for chain in ("arc", "bsc", "base"):
             command = RADAR.trend_command(chain)
             self.assertIn(f"--chain {chain}", command)
             self.assertIn("--min-created 30m", command)
@@ -21,6 +21,16 @@ class RadarTests(unittest.TestCase):
     def test_unsupported_chain_is_rejected(self):
         with self.assertRaises(ValueError):
             RADAR.trend_command("sol")
+
+    def test_chain_selection_requires_two_supported_chains(self):
+        self.assertEqual(RADAR.parse_chains("arc,bsc"), ("arc", "bsc"))
+        self.assertEqual(RADAR.parse_chains("base, arc"), ("base", "arc"))
+        with self.assertRaises(ValueError):
+            RADAR.parse_chains("arc")
+        with self.assertRaises(ValueError):
+            RADAR.parse_chains("arc,arc")
+        with self.assertRaises(ValueError):
+            RADAR.parse_chains("sol,bsc")
 
     def test_money_formatting(self):
         self.assertEqual(RADAR.money(1_250_000), "1.2M")

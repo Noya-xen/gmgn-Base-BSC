@@ -3,6 +3,7 @@
 
 import json
 import os
+import argparse
 import subprocess
 import sys
 import time
@@ -42,7 +43,8 @@ CHAT_ID = os.environ.get("TG_RADAR_GROUP_CHAT_ID", "")
 SIGNAL_THREAD_ID = os.environ.get("TG_SIGNAL_THREAD_ID", "")
 RADAR_TIMEZONE = os.environ.get("RADAR_TIMEZONE", "UTC")
 RADAR_LOCATION = os.environ.get("RADAR_LOCATION", RADAR_TIMEZONE)
-CHAINS = ("bsc", "base")
+SUPPORTED_CHAINS = ("arc", "bsc", "base")
+DEFAULT_CHAINS = ("bsc", "base")
 LIMIT = 100
 
 # These thresholds classify the same 1h scan into different use cases. They
@@ -58,6 +60,30 @@ LP_MAX_FLOW = 1.40
 LP_MAX_SWAP_SPEED = 1.80
 
 
+def parse_chains(value):
+    """Parse exactly two distinct supported chains for one radar cycle."""
+    if isinstance(value, str):
+        requested = tuple(part.strip().lower() for part in value.split(",") if part.strip())
+    else:
+        requested = tuple(str(part).strip().lower() for part in value if str(part).strip())
+    if len(requested) != 2:
+        raise ValueError(
+            "RADAR_CHAINS must contain exactly two chains: arc,bsc,base"
+        )
+    if len(set(requested)) != 2:
+        raise ValueError("RADAR_CHAINS must contain two different chains")
+    unsupported = [chain for chain in requested if chain not in SUPPORTED_CHAINS]
+    if unsupported:
+        raise ValueError(
+            f"Unsupported chain(s): {', '.join(unsupported)}. "
+            f"Choose from: {', '.join(SUPPORTED_CHAINS)}"
+        )
+    return requested
+
+
+CHAINS = parse_chains(os.environ.get("RADAR_CHAINS", ",".join(DEFAULT_CHAINS)))
+
+
 def trend_command(chain):
     """Return the GMGN Trending command for one EVM chain.
 
@@ -65,7 +91,7 @@ def trend_command(chain):
     In particular, no Solana ``min-gas-fee`` gate is applied because GMGN gas
     values are not comparable across chains.
     """
-    if chain not in CHAINS:
+    if chain not in SUPPORTED_CHAINS:
         raise ValueError(f"Unsupported radar chain: {chain}")
     return (
         f"gmgn-cli market trending --chain {chain} --interval 1h --limit {LIMIT} "
@@ -78,6 +104,7 @@ def trend_command(chain):
 # Keep named commands available for operators/scripts that used the old layout.
 BSC_CMD = trend_command("bsc")
 BASE_CMD = trend_command("base")
+ARC_CMD = trend_command("arc")
 
 
 def run(cmd):
@@ -345,7 +372,7 @@ def build_reports():
         return html_escape((t.get("symbol") or "?")[:14])
 
     def chain_title(chain):
-        return {"bsc": "BSC", "base": "BASE"}.get(chain, chain.upper())
+        return {"arc": "ARC", "bsc": "BSC", "base": "BASE"}.get(chain, chain.upper())
 
     def signal_report():
         lines = [f"GMGN V/L — {local_time} {RADAR_LOCATION}", ""]
@@ -532,7 +559,19 @@ def print_credit():
     print("  *==========================================*\n")
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="GMGN V/L radar for two EVM chains")
+    parser.add_argument(
+        "--chains",
+        help="Two comma-separated chains: arc,bsc,base (overrides RADAR_CHAINS)",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = parse_args()
+    if args.chains:
+        CHAINS = parse_chains(args.chains)
     print_credit()
     reports = build_reports()
     cid = get_chat_id()

@@ -9,6 +9,7 @@ FILTER_DIR="$HOME/gmgn-bsc-base-radar"
 mkdir -p "$SCRIPT_DIR" "$CONFIG_DIR" "$FILTER_DIR"
 install -m 0755 "$ROOT/src/gmgn-dlmm-radar.py" "$SCRIPT_DIR/gmgn-dlmm-radar.py"
 install -m 0644 "$ROOT/config/filter-query.json" "$FILTER_DIR/filter_query.json"
+install -m 0644 "$ROOT/config/arc-filter-query.json" "$FILTER_DIR/arc_filter_query.json"
 install -m 0644 "$ROOT/config/bsc-filter-query.json" "$FILTER_DIR/bsc_filter_query.json"
 install -m 0644 "$ROOT/config/base-filter-query.json" "$FILTER_DIR/base_filter_query.json"
 

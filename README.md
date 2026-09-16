@@ -12,9 +12,11 @@ Script ini hanya scanner. Tidak ada private key, signing, swap, atau eksekusi tr
 
 ## Perubahan chain
 
-BSC dan Base memakai pola command EVM yang sama seperti board Robinhood pada project sumber:
+BSC, Base, dan Arc memakai pola command EVM yang sama seperti board Robinhood pada project sumber. Untuk mengurangi pemakaian limit API, setiap siklus hanya menjalankan tepat dua chain yang dipilih:
 
-- chain: `bsc` dan `base`
+- pilihan chain: `arc`, `bsc`, `base`
+- default: `bsc,base`
+- contoh alternatif: `arc,bsc` atau `arc,base`
 - interval: `1h`
 - minimum liquidity: `$2,500`
 - minimum holders: `200`
@@ -41,6 +43,7 @@ npm install -g gmgn-cli
 gmgn-cli config
 gmgn-cli config --apply YOUR_GMGN_API_KEY
 gmgn-cli config --check
+gmgn-cli market trending --chain arc --interval 1h --limit 5
 gmgn-cli market trending --chain bsc --interval 1h --limit 5
 gmgn-cli market trending --chain base --interval 1h --limit 5
 ```
@@ -53,12 +56,18 @@ Salin `telegram.env.example` ke:
 ~/.config/gmgn-bsc-base-radar/telegram.env
 ```
 
-Isi `TG_BOT_TOKEN` dan `TG_RADAR_GROUP_CHAT_ID`. `TG_SIGNAL_THREAD_ID` opsional untuk mengirim Signal ke topic tertentu. `RADAR_TIMEZONE` memakai nama IANA, misalnya `Asia/Jakarta`.
+Isi `TG_BOT_TOKEN`, `TG_RADAR_GROUP_CHAT_ID`, dan `RADAR_CHAINS`. `RADAR_CHAINS` harus berisi tepat dua pilihan, misalnya `arc,bsc`. `TG_SIGNAL_THREAD_ID` opsional untuk mengirim Signal ke topic tertentu. `RADAR_TIMEZONE` memakai nama IANA, misalnya `Asia/Jakarta`.
 
 ## Jalankan lokal
 
 ```bash
 python3 src/gmgn-dlmm-radar.py
+```
+
+Untuk menjalankan kombinasi lain sekali saja tanpa mengubah environment:
+
+```bash
+python3 src/gmgn-dlmm-radar.py --chains arc,base
 ```
 
 Jika `TG_RADAR_GROUP_CHAT_ID` kosong, hanya report Signal yang dicetak ke terminal tanpa mengirim Telegram.
@@ -79,7 +88,8 @@ Gunakan `config/cron.json` untuk job setiap lima menit.
 
 ```text
 src/gmgn-dlmm-radar.py     scanner dan Telegram sender
-config/filter-query.json   filter umum BSC + Base
+config/filter-query.json   filter umum Arc + BSC + Base
+config/arc-filter-query.json
 config/bsc-filter-query.json
 config/base-filter-query.json
 config/cron.json           jadwal lima menit
