@@ -40,7 +40,14 @@ load_private_env()
 TOKEN = os.environ.get("TG_BOT_TOKEN", "")
 # This radar intentionally has its own destination, separate from any trade group.
 CHAT_ID = os.environ.get("TG_RADAR_GROUP_CHAT_ID", "")
-SIGNAL_THREAD_ID = os.environ.get("TG_SIGNAL_THREAD_ID", "")
+SIGNAL_THREAD_ID = os.environ.get("TG_SIGNAL_THREAD_ID", "").strip()
+# Keep the explicit TG_SEND_WATCH_THREAD_ID name supported because it is
+# intuitive in the env file. TG_WATCH_THREAD_ID is accepted as a shorter
+# alias for future configurations.
+WATCH_THREAD_ID = os.environ.get(
+    "TG_SEND_WATCH_THREAD_ID",
+    os.environ.get("TG_WATCH_THREAD_ID", ""),
+).strip()
 SEND_WATCH = os.environ.get("TG_SEND_WATCH", "1").strip().lower() not in {
     "0", "false", "no", "off"
 }
@@ -625,7 +632,7 @@ if __name__ == "__main__":
         parts_sent = send_signal_report(reports["signal"], cid, SIGNAL_THREAD_ID)
         print(f"signal=sent({parts_sent} msg)")
         if SEND_WATCH:
-            watch_parts_sent = send_watch_report(reports["watch"], cid, SIGNAL_THREAD_ID)
+            watch_parts_sent = send_watch_report(reports["watch"], cid, WATCH_THREAD_ID)
             print(f"watch=sent({watch_parts_sent} msg)")
         else:
             print("watch=disabled")

@@ -64,7 +64,7 @@ Salin `telegram.env.example` ke:
 ~/.config/gmgn-bsc-base-radar/telegram.env
 ```
 
-Isi `TG_BOT_TOKEN`, `TG_RADAR_GROUP_CHAT_ID`, dan `RADAR_CHAINS`. `RADAR_CHAINS` menerima satu atau beberapa pilihan yang dipisahkan koma, misalnya `arc,bsc` atau `sol,base,arc`. `TG_SIGNAL_THREAD_ID` opsional untuk mengirim Signal dan Watch ke topic tertentu. `TG_SEND_WATCH=1` mengaktifkan Watch; ubah menjadi `0` jika hanya ingin Signal. `RADAR_TIMEZONE` memakai nama IANA, misalnya `Asia/Jakarta`.
+Isi `TG_BOT_TOKEN`, `TG_RADAR_GROUP_CHAT_ID`, dan `RADAR_CHAINS`. `RADAR_CHAINS` menerima satu atau beberapa pilihan yang dipisahkan koma, misalnya `arc,bsc` atau `sol,base,arc`. `TG_SIGNAL_THREAD_ID` mengatur topic SIGNAL, sedangkan `TG_SEND_WATCH_THREAD_ID` mengatur topic khusus WATCH. `TG_SEND_WATCH=1` mengaktifkan Watch; ubah menjadi `0` jika hanya ingin Signal. `RADAR_TIMEZONE` memakai nama IANA, misalnya `Asia/Jakarta`.
 
 ## Jalankan lokal
 
