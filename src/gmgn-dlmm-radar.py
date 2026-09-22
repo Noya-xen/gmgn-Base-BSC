@@ -69,6 +69,12 @@ LIMIT = 100
 # remaining part of that five-minute slot and resumes from saved state.
 RADAR_INTERVAL_SECONDS = int(os.environ.get("RADAR_INTERVAL_SECONDS", "300"))
 VOLUME_SAFETY_SECONDS = int(os.environ.get("VOLUME_SAFETY_SECONDS", "10"))
+VOLUME_START_DELAY_SECONDS = int(
+    os.environ.get("VOLUME_START_DELAY_SECONDS", "60")
+)
+SIGNAL_ANALYSIS_LIMIT = max(
+    1, int(os.environ.get("SIGNAL_ANALYSIS_LIMIT", "10"))
+)
 VOLUME_SCAN_LIMIT = int(os.environ.get("VOLUME_SCAN_LIMIT", "20"))
 VOLUME_SPIKE_MIN_15M = float(os.environ.get("VOLUME_SPIKE_MIN_15M", "500000"))
 VOLUME_SPIKE_MIN_1H = float(os.environ.get("VOLUME_SPIKE_MIN_1H", "1000000"))
@@ -172,16 +178,18 @@ ROBINHOOD_CMD = trend_command("robinhood")
 STABLE_CMD = trend_command("stable")
 
 
-def run(cmd):
+def run(cmd, timeout=60):
     try:
-        out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60).stdout
+        out = subprocess.run(
+            cmd, shell=True, capture_output=True, text=True, timeout=timeout
+        ).stdout
         return json.loads(out)
     except Exception:
         return {}
 
 
-def gather(cmd=BSC_CMD):
-    tr = run(cmd)
+def gather(cmd=BSC_CMD, timeout=60):
+    tr = run(cmd, timeout=timeout)
     if isinstance(tr, dict):
         rank = tr.get("data", {}).get("rank", [])
         if isinstance(rank, list):
@@ -468,10 +476,9 @@ def lp_score(m):
 def build_reports():
     from datetime import datetime, timezone
 
-    scan_chains = tuple(dict.fromkeys((*RADAR_CHAINS, *VOLUME_CHAINS)))
     hits_by_chain = {
         chain: [t for t in gather(trend_command(chain)) if safe_for_dlmm(t)]
-        for chain in scan_chains
+        for chain in RADAR_CHAINS
     }
 
     def rank_key(t):
@@ -481,7 +488,16 @@ def build_reports():
 
     for hits in hits_by_chain.values():
         hits.sort(key=rank_key, reverse=True)
-    all_hits = [t for chain in RADAR_CHAINS for t in hits_by_chain[chain]]
+    # The Signal board displays at most ten names per chain. Analyze only that
+    # top slice so token-info and K-line requests do not consume the API
+    # budget on names that will never be displayed.
+    analysis_hits_by_chain = {
+        chain: hits_by_chain[chain][:SIGNAL_ANALYSIS_LIMIT]
+        for chain in RADAR_CHAINS
+    }
+    all_hits = [
+        t for chain in RADAR_CHAINS for t in analysis_hits_by_chain[chain]
+    ]
     price_by_address = token_price_map(all_hits)
 
     def snapshot_for(t):
@@ -524,7 +540,7 @@ def build_reports():
             lines.extend([title, "SYM      V/L  S1H  S5M  S×    MC    FLOW", "-" * 49])
             if not hits:
                 lines.append("none")
-            for t in hits[:10]:
+            for t in hits[:SIGNAL_ANALYSIS_LIMIT]:
                 m = metric(t)
                 row = (
                     f"{(t.get('symbol') or '?')[:7]:<7} {m['vl']:>4.1f} "
@@ -560,7 +576,7 @@ def build_reports():
     def watch_report():
         lines = [f"<b>👀 WATCH — kandidat pantauan</b> · {local_time} {html_escape(RADAR_LOCATION)}", ""]
         for chain in RADAR_CHAINS:
-            hits = hits_by_chain[chain]
+            hits = analysis_hits_by_chain[chain]
             rows = []
             for t in hits:
                 m = metric(t)
@@ -587,7 +603,7 @@ def build_reports():
     def lp_report():
         lines = [f"<b>💧 LP — fee capture watchlist</b> · {local_time} {html_escape(RADAR_LOCATION)}", ""]
         for chain in RADAR_CHAINS:
-            hits = hits_by_chain[chain]
+            hits = analysis_hits_by_chain[chain]
             rows = []
             for t in hits:
                 m = metric(t)
@@ -625,14 +641,45 @@ def build_reports():
         "signal": signal_report(),
         "watch": watch_report(),
         "lp": lp_report(),
-        "volume_candidates": {
-            chain: (
-                hits_by_chain[chain][:VOLUME_SCAN_LIMIT]
-                if VOLUME_SCAN_LIMIT > 0 else hits_by_chain[chain]
-            )
-            for chain in VOLUME_CHAINS
-        },
+        "radar_candidates": hits_by_chain,
     }
+
+
+def build_volume_candidates(radar_candidates, deadline):
+    """Discover volume candidates only after the SIGNAL cooldown."""
+    candidates = {}
+    for chain in VOLUME_CHAINS:
+        remaining = deadline - time.monotonic()
+        if remaining <= 1:
+            candidates[chain] = []
+            continue
+
+        # Reuse the SIGNAL universe when both jobs scan the same chain. This
+        # avoids a duplicate trending request in the same five-minute cycle.
+        if chain in radar_candidates:
+            hits = list(radar_candidates[chain])
+        else:
+            hits = [
+                t for t in gather(
+                    trend_command(chain), timeout=min(60, max(1, int(remaining)))
+                )
+                if safe_for_dlmm(t)
+            ]
+
+        hits.sort(
+            key=lambda t: (
+                float(t.get("volume") or 0)
+                / float(t.get("liquidity") or 1)
+                if float(t.get("liquidity") or 0) > 0 else 0,
+                float(t.get("volume") or 0),
+            ),
+            reverse=True,
+        )
+        candidates[chain] = (
+            hits[:VOLUME_SCAN_LIMIT]
+            if VOLUME_SCAN_LIMIT > 0 else hits
+        )
+    return candidates
 
 
 def load_volume_state():
@@ -961,9 +1008,39 @@ if __name__ == "__main__":
     volume_deadline = cycle_started + max(
         0, RADAR_INTERVAL_SECONDS - VOLUME_SAFETY_SECONDS
     )
-    matches, scanned, preempted = scan_volume_spikes(
-        reports["volume_candidates"], volume_deadline, VOLUME_CHAINS
+    remaining_before_cooldown = volume_deadline - time.monotonic()
+    volume_candidates = {}
+    matches = []
+    scanned = 0
+    preempted = False
+    radar_candidates = reports["radar_candidates"]
+    volume_can_reuse_radar = all(
+        chain in radar_candidates for chain in VOLUME_CHAINS
     )
+    if (
+        volume_can_reuse_radar
+        and not any(radar_candidates.get(chain) for chain in VOLUME_CHAINS)
+    ):
+        print("volume=skipped(no volume candidates)", file=sys.stderr)
+    elif remaining_before_cooldown <= VOLUME_START_DELAY_SECONDS:
+        print(
+            "volume=skipped(no time after SIGNAL cooldown)",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"gmgn-cooldown=sleep({VOLUME_START_DELAY_SECONDS}s)"
+        )
+        time.sleep(max(0, VOLUME_START_DELAY_SECONDS))
+        volume_candidates = build_volume_candidates(
+            radar_candidates, volume_deadline
+        )
+        if not any(volume_candidates.get(chain) for chain in VOLUME_CHAINS):
+            print("volume=skipped(no volume candidates)", file=sys.stderr)
+        else:
+            matches, scanned, preempted = scan_volume_spikes(
+                volume_candidates, volume_deadline, VOLUME_CHAINS
+            )
     print(
         f"volume=scanned({scanned}) matches({len(matches)}) "
         f"preempted({str(preempted).lower()})"

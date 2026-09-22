@@ -75,7 +75,7 @@ VOLUME_CHAINS=arc,eth,arbitrum
 
 `RADAR_CHAINS` hanya dipakai SIGNAL/WATCH, sedangkan `VOLUME_CHAINS` hanya dipakai VOLUME SPIKE. `TG_SIGNAL_THREAD_ID` mengatur topic SIGNAL, `TG_SEND_WATCH_THREAD_ID` mengatur topic WATCH, dan `TG_VOLUME_THREAD_ID` mengatur topic VOLUME SPIKE. `TG_SEND_WATCH=1` mengaktifkan Watch; ubah menjadi `0` jika hanya ingin Signal. `RADAR_TIMEZONE` memakai nama IANA, misalnya `Asia/Jakarta`.
 
-Scan tetap dipicu setiap lima menit. Dalam setiap siklus, SIGNAL dan WATCH diproses lebih dulu. Volume memakai sisa waktu sampai jadwal berikutnya; jika belum selesai, cursor disimpan di `~/.config/gmgn-bsc-base-radar/volume-state.json` lalu dilanjutkan pada siklus berikutnya. Alert volume hanya dikirim jika ada kandidat yang memenuhi threshold.
+Scan tetap dipicu setiap lima menit. Dalam setiap siklus, SIGNAL dan WATCH diproses lebih dulu. Detail analisis SIGNAL dibatasi ke 10 kandidat teratas per chain agar request GMGN tidak berlebihan. Setelah SIGNAL/WATCH selesai, script menunggu cooldown `VOLUME_START_DELAY_SECONDS` (default 60 detik) sebelum memulai volume. Volume memakai sisa waktu sampai jadwal berikutnya; jika belum selesai, cursor disimpan di `~/.config/gmgn-bsc-base-radar/volume-state.json` lalu dilanjutkan pada siklus berikutnya. Jika cooldown tidak menyisakan waktu yang cukup, volume dilewati dan SIGNAL tetap diprioritaskan.
 
 Threshold awal volume:
 
