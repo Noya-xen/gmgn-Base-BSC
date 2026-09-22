@@ -1,0 +1,15 @@
+{
+  "chain": "eth",
+  "interval": "1h",
+  "limit": 100,
+  "order_by": "volume",
+  "direction": "desc",
+  "min_liquidity": 2500,
+  "min_holder_count": 200,
+  "min_created": "30m",
+  "min_smart_degen_count": 2,
+  "min_swaps": 500,
+  "min_marketcap": 100000,
+  "min_gas_fee": null,
+  "not_wash_trading": true
+}

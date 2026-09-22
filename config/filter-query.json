@@ -1,6 +1,6 @@
 {
-  "chain_scope": ["arc", "bsc", "base"],
-  "max_selected_chains": 2,
+  "chain_scope": ["sol", "bsc", "base", "eth", "arbitrum", "hyperevm", "robinhood", "arc", "stable"],
+  "default_selected_chains": ["bsc", "base"],
   "interval": "1h",
   "limit": 100,
   "order_by": "volume",
@@ -13,5 +13,5 @@
   "min_marketcap": 100000,
   "min_gas_fee": null,
   "not_wash_trading": true,
-  "note": "Select exactly two of arc, bsc, and base. All three use the same EVM-style Robinhood gates; Solana's min-gas-fee gate is intentionally not applied."
+  "note": "Select any non-empty subset from chain_scope. All selected chains use the same screening flow and gates; Solana's min-gas-fee gate is intentionally not applied."
 }

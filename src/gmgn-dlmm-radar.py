@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scan GMGN pools on BSC and Base and send the SIGNAL board to Telegram."""
+"""Scan selected GMGN chains and send the SIGNAL board to Telegram."""
 
 import json
 import os
@@ -43,7 +43,13 @@ CHAT_ID = os.environ.get("TG_RADAR_GROUP_CHAT_ID", "")
 SIGNAL_THREAD_ID = os.environ.get("TG_SIGNAL_THREAD_ID", "")
 RADAR_TIMEZONE = os.environ.get("RADAR_TIMEZONE", "UTC")
 RADAR_LOCATION = os.environ.get("RADAR_LOCATION", RADAR_TIMEZONE)
-SUPPORTED_CHAINS = ("arc", "bsc", "base")
+# GMGN currently exposes the same market/token command family for these
+# chains. Keep the list in one place so operators can select any subset via
+# RADAR_CHAINS or --chains without changing the screening flow.
+SUPPORTED_CHAINS = (
+    "sol", "bsc", "base", "eth", "arbitrum", "hyperevm",
+    "robinhood", "arc", "stable",
+)
 DEFAULT_CHAINS = ("bsc", "base")
 LIMIT = 100
 
@@ -61,17 +67,18 @@ LP_MAX_SWAP_SPEED = 1.80
 
 
 def parse_chains(value):
-    """Parse exactly two distinct supported chains for one radar cycle."""
+    """Parse one or more distinct supported chains for one radar cycle."""
     if isinstance(value, str):
         requested = tuple(part.strip().lower() for part in value.split(",") if part.strip())
     else:
         requested = tuple(str(part).strip().lower() for part in value if str(part).strip())
-    if len(requested) != 2:
+    if not requested:
         raise ValueError(
-            "RADAR_CHAINS must contain exactly two chains: arc,bsc,base"
+            "RADAR_CHAINS must contain at least one chain: "
+            + ",".join(SUPPORTED_CHAINS)
         )
-    if len(set(requested)) != 2:
-        raise ValueError("RADAR_CHAINS must contain two different chains")
+    if len(set(requested)) != len(requested):
+        raise ValueError("RADAR_CHAINS must not contain duplicate chains")
     unsupported = [chain for chain in requested if chain not in SUPPORTED_CHAINS]
     if unsupported:
         raise ValueError(
@@ -105,6 +112,12 @@ def trend_command(chain):
 BSC_CMD = trend_command("bsc")
 BASE_CMD = trend_command("base")
 ARC_CMD = trend_command("arc")
+SOL_CMD = trend_command("sol")
+ETH_CMD = trend_command("eth")
+ARBITRUM_CMD = trend_command("arbitrum")
+HYPEREVM_CMD = trend_command("hyperevm")
+ROBINHOOD_CMD = trend_command("robinhood")
+STABLE_CMD = trend_command("stable")
 
 
 def run(cmd):
@@ -372,7 +385,17 @@ def build_reports():
         return html_escape((t.get("symbol") or "?")[:14])
 
     def chain_title(chain):
-        return {"arc": "ARC", "bsc": "BSC", "base": "BASE"}.get(chain, chain.upper())
+        return {
+            "sol": "SOL",
+            "bsc": "BSC",
+            "base": "BASE",
+            "eth": "ETH",
+            "arbitrum": "ARBITRUM",
+            "hyperevm": "HYPEREVM",
+            "robinhood": "ROBINHOOD",
+            "arc": "ARC",
+            "stable": "STABLE",
+        }.get(chain, chain.upper())
 
     def signal_report():
         lines = [f"GMGN V/L — {local_time} {RADAR_LOCATION}", ""]
@@ -560,10 +583,13 @@ def print_credit():
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="GMGN V/L radar for two EVM chains")
+    parser = argparse.ArgumentParser(description="GMGN V/L radar for selected GMGN chains")
     parser.add_argument(
         "--chains",
-        help="Two comma-separated chains: arc,bsc,base (overrides RADAR_CHAINS)",
+        help=(
+            "One or more comma-separated chains (overrides RADAR_CHAINS): "
+            + ",".join(SUPPORTED_CHAINS)
+        ),
     )
     return parser.parse_args()
 

@@ -12,6 +12,12 @@ install -m 0644 "$ROOT/config/filter-query.json" "$FILTER_DIR/filter_query.json"
 install -m 0644 "$ROOT/config/arc-filter-query.json" "$FILTER_DIR/arc_filter_query.json"
 install -m 0644 "$ROOT/config/bsc-filter-query.json" "$FILTER_DIR/bsc_filter_query.json"
 install -m 0644 "$ROOT/config/base-filter-query.json" "$FILTER_DIR/base_filter_query.json"
+install -m 0644 "$ROOT/config/sol-filter-query.json" "$FILTER_DIR/sol_filter_query.json"
+install -m 0644 "$ROOT/config/eth-filter-query.json" "$FILTER_DIR/eth_filter_query.json"
+install -m 0644 "$ROOT/config/arbitrum-filter-query.json" "$FILTER_DIR/arbitrum_filter_query.json"
+install -m 0644 "$ROOT/config/hyperevm-filter-query.json" "$FILTER_DIR/hyperevm_filter_query.json"
+install -m 0644 "$ROOT/config/robinhood-filter-query.json" "$FILTER_DIR/robinhood_filter_query.json"
+install -m 0644 "$ROOT/config/stable-filter-query.json" "$FILTER_DIR/stable_filter_query.json"
 
 if [[ ! -f "$CONFIG_DIR/telegram.env" ]]; then
   install -m 0600 "$ROOT/telegram.env.example" "$CONFIG_DIR/telegram.env"
