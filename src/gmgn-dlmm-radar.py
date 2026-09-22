@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scan selected GMGN chains and send the SIGNAL board to Telegram."""
+"""Scan selected GMGN chains and send radar and volume boards to Telegram."""
 
 import json
 import os
@@ -48,6 +48,7 @@ WATCH_THREAD_ID = os.environ.get(
     "TG_SEND_WATCH_THREAD_ID",
     os.environ.get("TG_WATCH_THREAD_ID", ""),
 ).strip()
+VOLUME_THREAD_ID = os.environ.get("TG_VOLUME_THREAD_ID", "").strip()
 SEND_WATCH = os.environ.get("TG_SEND_WATCH", "1").strip().lower() not in {
     "0", "false", "no", "off"
 }
@@ -63,6 +64,25 @@ SUPPORTED_CHAINS = (
 DEFAULT_CHAINS = ("bsc", "base")
 LIMIT = 100
 
+# The existing systemd/Hermes schedule starts a fresh run every five minutes.
+# Signal/Watch keep priority; volume scanning is allowed to use only the
+# remaining part of that five-minute slot and resumes from saved state.
+RADAR_INTERVAL_SECONDS = int(os.environ.get("RADAR_INTERVAL_SECONDS", "300"))
+VOLUME_SAFETY_SECONDS = int(os.environ.get("VOLUME_SAFETY_SECONDS", "10"))
+VOLUME_SCAN_LIMIT = int(os.environ.get("VOLUME_SCAN_LIMIT", "20"))
+VOLUME_SPIKE_MIN_15M = float(os.environ.get("VOLUME_SPIKE_MIN_15M", "500000"))
+VOLUME_SPIKE_MIN_1H = float(os.environ.get("VOLUME_SPIKE_MIN_1H", "1000000"))
+VOLUME_SPIKE_MIN_RATIO = float(os.environ.get("VOLUME_SPIKE_MIN_RATIO", "2.0"))
+VOLUME_ALERT_COOLDOWN_SECONDS = int(
+    os.environ.get("VOLUME_ALERT_COOLDOWN_SECONDS", "900")
+)
+VOLUME_STATE_PATH = Path(
+    os.environ.get(
+        "VOLUME_STATE_FILE",
+        str(Path.home() / ".config/gmgn-bsc-base-radar/volume-state.json"),
+    )
+)
+
 # These thresholds classify the same 1h scan into different use cases. They
 # are intentionally kept separate from the GMGN candidate gates above so the
 # full Signal board does not lose active names.
@@ -74,6 +94,22 @@ LP_MAX_VL = 0.80
 LP_MIN_FLOW = 0.60
 LP_MAX_FLOW = 1.40
 LP_MAX_SWAP_SPEED = 1.80
+
+CHAIN_LABELS = {
+    "sol": "SOL",
+    "bsc": "BSC",
+    "base": "BASE",
+    "eth": "ETH",
+    "arbitrum": "ARBITRUM",
+    "hyperevm": "HYPEREVM",
+    "robinhood": "ROBINHOOD",
+    "arc": "ARC",
+    "stable": "STABLE",
+}
+
+
+def chain_title(chain):
+    return CHAIN_LABELS.get(chain, chain.upper())
 
 
 def parse_chains(value):
@@ -233,6 +269,54 @@ def flow_5m(t, price_data=None):
         return ratio, f"{icon}{direction}{ratio:.1f}", int(swaps_1h), swaps_5m, swap_speed
     except Exception:
         return None, "-", 0, 0, None
+
+
+def volume_spike_data(t, chain, timeout=20):
+    """Read four 15m candles and return current 15m/rolling 1h volume."""
+    address = t.get("address")
+    if not address:
+        return None
+    now = int(time.time())
+    cmd = [
+        "gmgn-cli", "market", "kline", "--chain", chain,
+        "--address", address, "--resolution", "15m",
+        "--from", str(now - 3600), "--to", str(now), "--raw",
+    ]
+    try:
+        out = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=max(1, timeout)
+        ).stdout
+        raw = json.loads(out)
+        candles = raw.get("list", []) if isinstance(raw, dict) else []
+        candles = [c for c in candles if isinstance(c, dict)]
+        candles.sort(key=lambda c: float(c.get("time") or 0))
+        candles = candles[-4:]
+        if len(candles) < 4:
+            return None
+
+        volumes = [float(c.get("volume") or 0) for c in candles]
+        volume_15m = volumes[-1]
+        volume_1h = sum(volumes)
+        average_15m = volume_1h / 4 if volume_1h > 0 else 0
+        spike_ratio = volume_15m / average_15m if average_15m > 0 else 0
+
+        first_open = float(candles[0].get("open") or 0)
+        last_close = float(candles[-1].get("close") or 0)
+        previous_close = float(candles[-2].get("close") or 0)
+        change_1h = ((last_close / first_open) - 1) * 100 if first_open > 0 else 0
+        change_15m = (
+            ((last_close / previous_close) - 1) * 100
+            if previous_close > 0 else 0
+        )
+        return {
+            "volume_15m": volume_15m,
+            "volume_1h": volume_1h,
+            "spike_ratio": spike_ratio,
+            "change_15m": change_15m,
+            "change_1h": change_1h,
+        }
+    except Exception:
+        return None
 
 
 def money(v):
@@ -515,7 +599,166 @@ def build_reports():
         "signal": signal_report(),
         "watch": watch_report(),
         "lp": lp_report(),
+        "volume_candidates": {
+            chain: (
+                hits[:VOLUME_SCAN_LIMIT]
+                if VOLUME_SCAN_LIMIT > 0 else hits
+            )
+            for chain, hits in hits_by_chain.items()
+        },
     }
+
+
+def load_volume_state():
+    """Load resumable volume cursor and alert cooldown state."""
+    default = {"next_chain": 0, "token_indices": {}, "last_alerts": {}}
+    try:
+        state = json.loads(VOLUME_STATE_PATH.read_text())
+        if not isinstance(state, dict):
+            return default
+        state.setdefault("next_chain", 0)
+        state.setdefault("token_indices", {})
+        state.setdefault("last_alerts", {})
+        return state
+    except Exception:
+        return default
+
+
+def save_volume_state(state):
+    """Persist volume cursor atomically so the next cycle can resume."""
+    try:
+        VOLUME_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = VOLUME_STATE_PATH.with_suffix(".tmp")
+        temp_path.write_text(json.dumps(state, indent=2) + "\n")
+        temp_path.replace(VOLUME_STATE_PATH)
+    except Exception as exc:
+        print(f"volume-state=FAIL {exc}", file=sys.stderr)
+
+
+def scan_volume_spikes(candidates, deadline):
+    """Scan candidates round-robin until the next radar slot is due."""
+    state = load_volume_state()
+    if not any(candidates.get(chain) for chain in CHAINS):
+        return [], 0, False
+
+    try:
+        next_chain = int(state.get("next_chain", 0)) % len(CHAINS)
+    except (TypeError, ValueError):
+        next_chain = 0
+    token_indices = state.get("token_indices", {})
+    last_alerts = state.get("last_alerts", {})
+    now = int(time.time())
+    last_alerts = {
+        key: value for key, value in last_alerts.items()
+        if isinstance(value, (int, float))
+        and now - value < VOLUME_ALERT_COOLDOWN_SECONDS
+    }
+
+    matches = []
+    scanned = 0
+    empty_chains = 0
+    preempted = False
+
+    try:
+        while time.monotonic() < deadline:
+            chain = CHAINS[next_chain]
+            hits = candidates.get(chain, [])
+            if not hits:
+                empty_chains += 1
+                next_chain = (next_chain + 1) % len(CHAINS)
+                if empty_chains >= len(CHAINS):
+                    break
+                continue
+
+            empty_chains = 0
+            try:
+                token_index = int(token_indices.get(chain, 0)) % len(hits)
+            except (TypeError, ValueError):
+                token_index = 0
+            token = hits[token_index]
+            token_indices[chain] = (token_index + 1) % len(hits)
+            next_chain = (next_chain + 1) % len(CHAINS)
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 1:
+                preempted = True
+                break
+            data = volume_spike_data(
+                token,
+                chain,
+                timeout=min(20, max(1, int(remaining))),
+            )
+            scanned += 1
+            if not data:
+                continue
+            if not (
+                data["volume_15m"] >= VOLUME_SPIKE_MIN_15M
+                and data["volume_1h"] >= VOLUME_SPIKE_MIN_1H
+                and data["spike_ratio"] >= VOLUME_SPIKE_MIN_RATIO
+            ):
+                continue
+
+            address = str(token.get("address") or "").strip()
+            alert_key = f"{chain}:{address}"
+            if not address or alert_key in last_alerts:
+                continue
+            last_alerts[alert_key] = now
+            matches.append({"chain": chain, "token": token, "data": data})
+    finally:
+        state["next_chain"] = next_chain
+        state["token_indices"] = token_indices
+        state["last_alerts"] = last_alerts
+        save_volume_state(state)
+
+    if time.monotonic() >= deadline:
+        preempted = True
+    return matches, scanned, preempted
+
+
+def build_volume_report(matches):
+    """Build a Signal-style board containing only volume spike matches."""
+    from datetime import datetime, timezone
+
+    try:
+        local_tz = ZoneInfo(RADAR_TIMEZONE)
+    except ZoneInfoNotFoundError:
+        local_tz = timezone.utc
+    local_time = datetime.now(local_tz).strftime("%H:%M")
+    by_chain = {chain: [] for chain in CHAINS}
+    for match in matches:
+        by_chain.setdefault(match["chain"], []).append(match)
+
+    lines = [f"GMGN VOLUME SPIKE — {local_time} {RADAR_LOCATION}", ""]
+    for chain in CHAINS:
+        lines.extend([chain_title(chain), "SYM      V15    V1H   SPIKE  Δ15M", "-" * 42])
+        rows = by_chain.get(chain, [])
+        if not rows:
+            lines.append("none")
+        for match in rows:
+            token = match["token"]
+            data = match["data"]
+            row = (
+                f"{(token.get('symbol') or '?')[:7]:<7} "
+                f"{money(data['volume_15m']):>5} "
+                f"{money(data['volume_1h']):>5} "
+                f"{data['spike_ratio']:>5.1f}x "
+                f"{data['change_15m']:>+6.1f}%"
+            )
+            ca = " ".join(str(token.get("address") or "-").split())
+            lines.extend([row, "CA:", ca])
+
+    lines.extend([
+        "",
+        "SPIKE",
+        "V15 / (V1H / 4).",
+        f"MIN V15: {money(VOLUME_SPIKE_MIN_15M)}",
+        f"MIN V1H: {money(VOLUME_SPIKE_MIN_1H)}",
+        f"MIN SPIKE: {VOLUME_SPIKE_MIN_RATIO:.1f}x",
+        "",
+        "Volume besar bukan jaminan aman untuk LP.",
+        "Cek liquidity, buy/sell pressure, dan wash trading sebelum masuk.",
+    ])
+    return f"<pre>{html_escape(chr(10).join(lines))}</pre>"
 
 
 def get_chat_id():
@@ -617,6 +860,7 @@ def parse_args():
 
 
 if __name__ == "__main__":
+    cycle_started = time.monotonic()
     args = parse_args()
     if args.chains:
         CHAINS = parse_chains(args.chains)
@@ -624,17 +868,43 @@ if __name__ == "__main__":
     reports = build_reports()
     cid = get_chat_id()
     if not cid:
-        # Fallback: print only SIGNAL so local output matches Telegram output.
+        # Fallback: print radar output locally when Telegram is not configured.
         print(f"\n--- SIGNAL ---\n{reports['signal']}")
-        print("[TG_RADAR_GROUP_CHAT_ID is not configured]", file=sys.stderr)
-        sys.exit(0)
-    try:
-        parts_sent = send_signal_report(reports["signal"], cid, SIGNAL_THREAD_ID)
-        print(f"signal=sent({parts_sent} msg)")
         if SEND_WATCH:
-            watch_parts_sent = send_watch_report(reports["watch"], cid, WATCH_THREAD_ID)
-            print(f"watch=sent({watch_parts_sent} msg)")
+            print(f"\n--- WATCH ---\n{reports['watch']}")
+        print("[TG_RADAR_GROUP_CHAT_ID is not configured]", file=sys.stderr)
+    else:
+        try:
+            parts_sent = send_signal_report(reports["signal"], cid, SIGNAL_THREAD_ID)
+            print(f"signal=sent({parts_sent} msg)")
+            if SEND_WATCH:
+                watch_parts_sent = send_watch_report(reports["watch"], cid, WATCH_THREAD_ID)
+                print(f"watch=sent({watch_parts_sent} msg)")
+            else:
+                print("watch=disabled")
+        except Exception as exc:
+            print(f"telegram=FAIL {exc}")
+
+    volume_deadline = cycle_started + max(
+        0, RADAR_INTERVAL_SECONDS - VOLUME_SAFETY_SECONDS
+    )
+    matches, scanned, preempted = scan_volume_spikes(
+        reports["volume_candidates"], volume_deadline
+    )
+    print(
+        f"volume=scanned({scanned}) matches({len(matches)}) "
+        f"preempted({str(preempted).lower()})"
+    )
+    if matches:
+        volume_report = build_volume_report(matches)
+        if cid and VOLUME_THREAD_ID:
+            try:
+                parts_sent = send_report(volume_report, cid, VOLUME_THREAD_ID)
+                print(f"volume=sent({parts_sent} msg)")
+            except Exception as exc:
+                print(f"volume=FAIL {exc}")
+        elif cid:
+            print("volume=SKIP TG_VOLUME_THREAD_ID is not configured", file=sys.stderr)
+            print(f"\n--- VOLUME SPIKE ---\n{volume_report}")
         else:
-            print("watch=disabled")
-    except Exception as exc:
-        print(f"telegram=FAIL {exc}")
+            print(f"\n--- VOLUME SPIKE ---\n{volume_report}")

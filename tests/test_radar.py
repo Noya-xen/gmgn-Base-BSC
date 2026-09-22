@@ -1,6 +1,9 @@
 import importlib.util
+import json
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).parents[1] / "src" / "gmgn-dlmm-radar.py"
@@ -83,6 +86,23 @@ class RadarTests(unittest.TestCase):
             self.assertEqual(RADAR.send_watch_report("<b>WATCH</b>", "-1001"), 0)
         finally:
             RADAR.SEND_WATCH = original_send_watch
+
+    def test_volume_spike_uses_last_15m_and_1h_candles(self):
+        candles = [
+            {"time": 1, "open": "1", "close": "1", "volume": "300000"},
+            {"time": 2, "open": "1", "close": "1", "volume": "300000"},
+            {"time": 3, "open": "1", "close": "1", "volume": "400000"},
+            {"time": 4, "open": "1", "close": "1", "volume": "1000000"},
+        ]
+        fake = SimpleNamespace(stdout=json.dumps({"list": candles}))
+        with patch.object(RADAR.subprocess, "run", return_value=fake) as run:
+            data = RADAR.volume_spike_data({"address": "0xabc"}, "base")
+        self.assertEqual(data["volume_15m"], 1_000_000)
+        self.assertEqual(data["volume_1h"], 2_000_000)
+        self.assertEqual(data["spike_ratio"], 2.0)
+        command = run.call_args.args[0]
+        self.assertIn("--resolution", command)
+        self.assertIn("15m", command)
 
 
 if __name__ == "__main__":

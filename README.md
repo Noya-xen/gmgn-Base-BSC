@@ -2,10 +2,11 @@
 
 link project: https://github.com/Noya-xen/gmgn-Base-BSC
 
-Port EVM dari GMGN V/L Radar. Radar ini mempertahankan alur sumber: mengambil kandidat dari GMGN Trending, menghitung `V/L`, `FLOW`, dan `S×`, lalu mengirim board `SIGNAL` dan `WATCH` ke Telegram:
+Port EVM dari GMGN V/L Radar. Radar ini mempertahankan alur sumber: mengambil kandidat dari GMGN Trending, menghitung `V/L`, `FLOW`, dan `S×`, lalu mengirim board `SIGNAL`, `WATCH`, dan `VOLUME SPIKE` ke Telegram:
 
 - `SIGNAL`: seluruh kandidat dari chain terpilih, maksimal 10 token per chain.
 - `WATCH`: kandidat momentum dengan skor minimal, contract address, dan link chart.
+- `VOLUME SPIKE`: kandidat volume besar dari chain terpilih, memakai volume 15m, rolling 1h, dan rasio spike.
 
 Fungsi scoring Watch/LP dari struktur sumber tetap tersedia. `WATCH` sekarang dikirim ke Telegram; `LP` tetap hanya tersedia di kode dan tidak dikirim.
 
@@ -64,7 +65,19 @@ Salin `telegram.env.example` ke:
 ~/.config/gmgn-bsc-base-radar/telegram.env
 ```
 
-Isi `TG_BOT_TOKEN`, `TG_RADAR_GROUP_CHAT_ID`, dan `RADAR_CHAINS`. `RADAR_CHAINS` menerima satu atau beberapa pilihan yang dipisahkan koma, misalnya `arc,bsc` atau `sol,base,arc`. `TG_SIGNAL_THREAD_ID` mengatur topic SIGNAL, sedangkan `TG_SEND_WATCH_THREAD_ID` mengatur topic khusus WATCH. `TG_SEND_WATCH=1` mengaktifkan Watch; ubah menjadi `0` jika hanya ingin Signal. `RADAR_TIMEZONE` memakai nama IANA, misalnya `Asia/Jakarta`.
+Isi `TG_BOT_TOKEN`, `TG_RADAR_GROUP_CHAT_ID`, dan `RADAR_CHAINS`. `RADAR_CHAINS` menerima satu atau beberapa pilihan yang dipisahkan koma, misalnya `arc,bsc` atau `sol,base,arc`. `TG_SIGNAL_THREAD_ID` mengatur topic SIGNAL, `TG_SEND_WATCH_THREAD_ID` mengatur topic WATCH, dan `TG_VOLUME_THREAD_ID` mengatur topic VOLUME SPIKE. `TG_SEND_WATCH=1` mengaktifkan Watch; ubah menjadi `0` jika hanya ingin Signal. `RADAR_TIMEZONE` memakai nama IANA, misalnya `Asia/Jakarta`.
+
+Scan tetap dipicu setiap lima menit. Dalam setiap siklus, SIGNAL dan WATCH diproses lebih dulu. Volume memakai sisa waktu sampai jadwal berikutnya; jika belum selesai, cursor disimpan di `~/.config/gmgn-bsc-base-radar/volume-state.json` lalu dilanjutkan pada siklus berikutnya. Alert volume hanya dikirim jika ada kandidat yang memenuhi threshold.
+
+Threshold awal volume:
+
+```text
+V15 >= 500k
+V1H >= 1M
+SPIKE >= 2.0x
+```
+
+`SPIKE` dihitung sebagai `V15 / (V1H / 4)`. Threshold tersebut dianggap memakai satuan volume yang dikembalikan GMGN CLI; verifikasi output raw terlebih dahulu sebelum menganggapnya sebagai USD.
 
 ## Jalankan lokal
 
@@ -78,7 +91,7 @@ Untuk menjalankan kombinasi lain sekali saja tanpa mengubah environment:
 python3 src/gmgn-dlmm-radar.py --chains arc,base
 ```
 
-Jika `TG_RADAR_GROUP_CHAT_ID` kosong, report Signal dicetak ke terminal tanpa mengirim Telegram.
+Jika `TG_RADAR_GROUP_CHAT_ID` kosong, report Signal dan volume dicetak ke terminal tanpa mengirim Telegram. Jika `TG_VOLUME_THREAD_ID` kosong, alert volume tidak dikirim ke topic general; alert hanya dicetak ke terminal.
 
 ## Install scheduler
 
