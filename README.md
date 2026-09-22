@@ -2,11 +2,12 @@
 
 link project: https://github.com/Noya-xen/gmgn-Base-BSC
 
-Port EVM dari GMGN V/L Radar. Radar ini mempertahankan alur sumber: mengambil kandidat dari GMGN Trending, menghitung `V/L`, `FLOW`, dan `S×`, lalu mengirim satu board `SIGNAL` ke Telegram:
+Port EVM dari GMGN V/L Radar. Radar ini mempertahankan alur sumber: mengambil kandidat dari GMGN Trending, menghitung `V/L`, `FLOW`, dan `S×`, lalu mengirim board `SIGNAL` dan `WATCH` ke Telegram:
 
 - `SIGNAL`: seluruh kandidat dari chain terpilih, maksimal 10 token per chain.
+- `WATCH`: kandidat momentum dengan skor minimal, contract address, dan link chart.
 
-Fungsi scoring Watch/LP dari struktur sumber tetap tersedia di kode untuk kompatibilitas, tetapi tidak dikirim ke Telegram.
+Fungsi scoring Watch/LP dari struktur sumber tetap tersedia. `WATCH` sekarang dikirim ke Telegram; `LP` tetap hanya tersedia di kode dan tidak dikirim.
 
 Script ini hanya scanner. Tidak ada private key, signing, swap, atau eksekusi transaksi.
 
@@ -63,7 +64,7 @@ Salin `telegram.env.example` ke:
 ~/.config/gmgn-bsc-base-radar/telegram.env
 ```
 
-Isi `TG_BOT_TOKEN`, `TG_RADAR_GROUP_CHAT_ID`, dan `RADAR_CHAINS`. `RADAR_CHAINS` menerima satu atau beberapa pilihan yang dipisahkan koma, misalnya `arc,bsc` atau `sol,base,arc`. `TG_SIGNAL_THREAD_ID` opsional untuk mengirim Signal ke topic tertentu. `RADAR_TIMEZONE` memakai nama IANA, misalnya `Asia/Jakarta`.
+Isi `TG_BOT_TOKEN`, `TG_RADAR_GROUP_CHAT_ID`, dan `RADAR_CHAINS`. `RADAR_CHAINS` menerima satu atau beberapa pilihan yang dipisahkan koma, misalnya `arc,bsc` atau `sol,base,arc`. `TG_SIGNAL_THREAD_ID` opsional untuk mengirim Signal dan Watch ke topic tertentu. `TG_SEND_WATCH=1` mengaktifkan Watch; ubah menjadi `0` jika hanya ingin Signal. `RADAR_TIMEZONE` memakai nama IANA, misalnya `Asia/Jakarta`.
 
 ## Jalankan lokal
 
@@ -77,7 +78,7 @@ Untuk menjalankan kombinasi lain sekali saja tanpa mengubah environment:
 python3 src/gmgn-dlmm-radar.py --chains arc,base
 ```
 
-Jika `TG_RADAR_GROUP_CHAT_ID` kosong, hanya report Signal yang dicetak ke terminal tanpa mengirim Telegram.
+Jika `TG_RADAR_GROUP_CHAT_ID` kosong, report Signal dicetak ke terminal tanpa mengirim Telegram.
 
 ## Install scheduler
 

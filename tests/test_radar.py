@@ -62,6 +62,28 @@ class RadarTests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(sent, [("<pre>SIGNAL</pre>", "-1001", "42")])
 
+    def test_watch_sender_sends_watch_parts(self):
+        sent = []
+        original_send = RADAR.send
+        original_send_watch = RADAR.SEND_WATCH
+        try:
+            RADAR.SEND_WATCH = True
+            RADAR.send = lambda text, chat_id, thread_id="": sent.append((text, chat_id, thread_id)) or {"ok": True}
+            count = RADAR.send_watch_report("<b>WATCH</b>", "-1001", "42")
+        finally:
+            RADAR.send = original_send
+            RADAR.SEND_WATCH = original_send_watch
+        self.assertEqual(count, 1)
+        self.assertEqual(sent, [("<b>WATCH</b>", "-1001", "42")])
+
+    def test_watch_sender_can_be_disabled(self):
+        original_send_watch = RADAR.SEND_WATCH
+        try:
+            RADAR.SEND_WATCH = False
+            self.assertEqual(RADAR.send_watch_report("<b>WATCH</b>", "-1001"), 0)
+        finally:
+            RADAR.SEND_WATCH = original_send_watch
+
 
 if __name__ == "__main__":
     unittest.main()

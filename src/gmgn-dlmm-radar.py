@@ -41,6 +41,9 @@ TOKEN = os.environ.get("TG_BOT_TOKEN", "")
 # This radar intentionally has its own destination, separate from any trade group.
 CHAT_ID = os.environ.get("TG_RADAR_GROUP_CHAT_ID", "")
 SIGNAL_THREAD_ID = os.environ.get("TG_SIGNAL_THREAD_ID", "")
+SEND_WATCH = os.environ.get("TG_SEND_WATCH", "1").strip().lower() not in {
+    "0", "false", "no", "off"
+}
 RADAR_TIMEZONE = os.environ.get("RADAR_TIMEZONE", "UTC")
 RADAR_LOCATION = os.environ.get("RADAR_LOCATION", RADAR_TIMEZONE)
 # GMGN currently exposes the same market/token command family for these
@@ -564,14 +567,26 @@ def send(text, chat_id, thread_id=""):
         raise RuntimeError(f"Telegram HTTP {exc.code}: {detail}") from exc
 
 
-def send_signal_report(report, chat_id, thread_id=""):
-    """Send only the SIGNAL board, split safely for Telegram's size limit."""
+def send_report(report, chat_id, thread_id=""):
+    """Send one HTML report, split safely for Telegram's size limit."""
     parts = split_message(report)
     for part in parts:
         result = send(part, chat_id, thread_id)
         if not result.get("ok"):
             raise RuntimeError(str(result))
     return len(parts)
+
+
+def send_signal_report(report, chat_id, thread_id=""):
+    """Backward-compatible SIGNAL sender."""
+    return send_report(report, chat_id, thread_id)
+
+
+def send_watch_report(report, chat_id, thread_id=""):
+    """Send the WATCH board when TG_SEND_WATCH is enabled."""
+    if not SEND_WATCH:
+        return 0
+    return send_report(report, chat_id, thread_id)
 
 
 def print_credit():
@@ -609,5 +624,10 @@ if __name__ == "__main__":
     try:
         parts_sent = send_signal_report(reports["signal"], cid, SIGNAL_THREAD_ID)
         print(f"signal=sent({parts_sent} msg)")
+        if SEND_WATCH:
+            watch_parts_sent = send_watch_report(reports["watch"], cid, SIGNAL_THREAD_ID)
+            print(f"watch=sent({watch_parts_sent} msg)")
+        else:
+            print("watch=disabled")
     except Exception as exc:
-        print(f"signal=FAIL {exc}")
+        print(f"telegram=FAIL {exc}")
