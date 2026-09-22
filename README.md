@@ -6,7 +6,7 @@ Port EVM dari GMGN V/L Radar. Radar ini mempertahankan alur sumber: mengambil ka
 
 - `SIGNAL`: seluruh kandidat dari chain terpilih, maksimal 10 token per chain.
 - `WATCH`: kandidat momentum dengan skor minimal, contract address, dan link chart.
-- `VOLUME SPIKE`: kandidat volume besar dari chain terpilih, memakai volume 15m, rolling 1h, dan rasio spike.
+- `VOLUME WATCH`: format kartu per token, berisi status V15/V1H, market cap, dan contract address.
 
 Fungsi scoring Watch/LP dari struktur sumber tetap tersedia. `WATCH` sekarang dikirim ke Telegram; `LP` tetap hanya tersedia di kode dan tidak dikirim.
 
@@ -82,10 +82,9 @@ Threshold awal volume:
 ```text
 V15 >= 500k
 V1H >= 1M
-SPIKE >= 2.0x
 ```
 
-`SPIKE` dihitung sebagai `V15 / (V1H / 4)`. Threshold tersebut dianggap memakai satuan volume yang dikembalikan GMGN CLI; verifikasi output raw terlebih dahulu sebelum menganggapnya sebagai USD.
+Alert dikirim jika `V15` atau `V1H` memenuhi threshold. Keduanya tetap ditampilkan dengan status `PASS` atau `belum memenuhi`. `SPIKE` dihitung sebagai `V15 / (V1H / 4)` dan hanya ditampilkan sebagai informasi tambahan. Threshold tersebut dianggap memakai satuan volume yang dikembalikan GMGN CLI; verifikasi output raw terlebih dahulu sebelum menganggapnya sebagai USD.
 
 ## Jalankan lokal
 

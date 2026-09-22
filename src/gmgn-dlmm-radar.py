@@ -72,7 +72,6 @@ VOLUME_SAFETY_SECONDS = int(os.environ.get("VOLUME_SAFETY_SECONDS", "10"))
 VOLUME_SCAN_LIMIT = int(os.environ.get("VOLUME_SCAN_LIMIT", "20"))
 VOLUME_SPIKE_MIN_15M = float(os.environ.get("VOLUME_SPIKE_MIN_15M", "500000"))
 VOLUME_SPIKE_MIN_1H = float(os.environ.get("VOLUME_SPIKE_MIN_1H", "1000000"))
-VOLUME_SPIKE_MIN_RATIO = float(os.environ.get("VOLUME_SPIKE_MIN_RATIO", "2.0"))
 VOLUME_ALERT_COOLDOWN_SECONDS = int(
     os.environ.get("VOLUME_ALERT_COOLDOWN_SECONDS", "900")
 )
@@ -324,6 +323,25 @@ def volume_spike_data(t, chain, timeout=20):
         }
     except Exception:
         return None
+
+
+def volume_threshold_status(data):
+    """Return independent 15m/1h status; either passing window alerts."""
+    pass_15m = data["volume_15m"] >= VOLUME_SPIKE_MIN_15M
+    pass_1h = data["volume_1h"] >= VOLUME_SPIKE_MIN_1H
+    if not pass_15m and not pass_1h:
+        return None
+    if pass_15m and pass_1h:
+        status = "both"
+    elif pass_15m:
+        status = "15m"
+    else:
+        status = "1h"
+    return {
+        "pass_15m": pass_15m,
+        "pass_1h": pass_1h,
+        "status": status,
+    }
 
 
 def money(v):
@@ -659,11 +677,15 @@ def scan_volume_spikes(candidates, deadline, chains=None):
     token_indices = state.get("token_indices", {})
     last_alerts = state.get("last_alerts", {})
     now = int(time.time())
-    last_alerts = {
-        key: value for key, value in last_alerts.items()
-        if isinstance(value, (int, float))
-        and now - value < VOLUME_ALERT_COOLDOWN_SECONDS
-    }
+    active_alerts = {}
+    for key, value in last_alerts.items():
+        sent_at = value.get("sent_at") if isinstance(value, dict) else value
+        if (
+            isinstance(sent_at, (int, float))
+            and now - sent_at < VOLUME_ALERT_COOLDOWN_SECONDS
+        ):
+            active_alerts[key] = value
+    last_alerts = active_alerts
 
     matches = []
     scanned = 0
@@ -702,19 +724,38 @@ def scan_volume_spikes(candidates, deadline, chains=None):
             scanned += 1
             if not data:
                 continue
-            if not (
-                data["volume_15m"] >= VOLUME_SPIKE_MIN_15M
-                and data["volume_1h"] >= VOLUME_SPIKE_MIN_1H
-                and data["spike_ratio"] >= VOLUME_SPIKE_MIN_RATIO
-            ):
+            status = volume_threshold_status(data)
+            if not status:
                 continue
 
             address = str(token.get("address") or "").strip()
             alert_key = f"{chain}:{address}"
-            if not address or alert_key in last_alerts:
+            previous = last_alerts.get(alert_key)
+            previous_status = (
+                previous.get("status")
+                if isinstance(previous, dict) else None
+            )
+            previous_sent_at = (
+                previous.get("sent_at")
+                if isinstance(previous, dict) else previous
+            )
+            same_status_in_cooldown = (
+                previous_status == status["status"]
+                and isinstance(previous_sent_at, (int, float))
+                and now - previous_sent_at < VOLUME_ALERT_COOLDOWN_SECONDS
+            )
+            if not address or same_status_in_cooldown:
                 continue
-            last_alerts[alert_key] = now
-            matches.append({"chain": chain, "token": token, "data": data})
+            last_alerts[alert_key] = {
+                "sent_at": now,
+                "status": status["status"],
+            }
+            matches.append({
+                "chain": chain,
+                "token": token,
+                "data": data,
+                **status,
+            })
     finally:
         state["next_chain"] = next_chain
         state["token_indices"] = token_indices
@@ -727,7 +768,7 @@ def scan_volume_spikes(candidates, deadline, chains=None):
 
 
 def build_volume_report(matches, chains=None):
-    """Build a Signal-style board containing only volume spike matches."""
+    """Build a Watch-style board containing only volume spike matches."""
     from datetime import datetime, timezone
 
     try:
@@ -740,37 +781,49 @@ def build_volume_report(matches, chains=None):
     for match in matches:
         by_chain.setdefault(match["chain"], []).append(match)
 
-    lines = [f"GMGN VOLUME SPIKE — {local_time} {RADAR_LOCATION}", ""]
+    lines = [
+        f"<b>👀 VOLUME WATCH</b> · {local_time} {html_escape(RADAR_LOCATION)}",
+        "",
+    ]
     for chain in chains:
-        lines.extend([chain_title(chain), "SYM      V15    V1H   SPIKE  Δ15M", "-" * 42])
         rows = by_chain.get(chain, [])
         if not rows:
-            lines.append("none")
+            continue
         for match in rows:
             token = match["token"]
             data = match["data"]
-            row = (
-                f"{(token.get('symbol') or '?')[:7]:<7} "
-                f"{money(data['volume_15m']):>5} "
-                f"{money(data['volume_1h']):>5} "
-                f"{data['spike_ratio']:>5.1f}x "
-                f"{data['change_15m']:>+6.1f}%"
-            )
-            ca = " ".join(str(token.get("address") or "-").split())
-            lines.extend([row, "CA:", ca])
+            if match["status"] == "both":
+                status_label = "🔥 BOTH PASS"
+            elif match["status"] == "15m":
+                status_label = "⚡ 15M PASS"
+            else:
+                status_label = "🕐 1H PASS"
+            v15_status = "✅" if match["pass_15m"] else "⚠️"
+            v1h_status = "✅" if match["pass_1h"] else "⚠️"
+            symbol = html_escape(str(token.get("symbol") or "?")[:20])
+            lines.extend([
+                f"<b>{symbol}</b> · {status_label} · {chain_title(chain)}",
+                f"15M: {v15_status} {money(data['volume_15m'])} / "
+                f"min {money(VOLUME_SPIKE_MIN_15M)}",
+                f"1H: {v1h_status} {money(data['volume_1h'])} / "
+                f"min {money(VOLUME_SPIKE_MIN_1H)}",
+                f"SPIKE: {data['spike_ratio']:.2f}x · "
+                f"Δ15M: {data['change_15m']:+.1f}%",
+                f"MC: ${money(token.get('market_cap'))}",
+                f"CA: {ca_markup(token)}",
+                "",
+            ])
 
     lines.extend([
         "",
-        "SPIKE",
-        "V15 / (V1H / 4).",
-        f"MIN V15: {money(VOLUME_SPIKE_MIN_15M)}",
-        f"MIN V1H: {money(VOLUME_SPIKE_MIN_1H)}",
-        f"MIN SPIKE: {VOLUME_SPIKE_MIN_RATIO:.1f}x",
+        "<b>RULE</b>",
+        "Alert jika V15 ATAU V1H memenuhi minimum.",
+        "SPIKE = V15 / (V1H / 4), sebagai informasi tambahan.",
         "",
         "Volume besar bukan jaminan aman untuk LP.",
         "Cek liquidity, buy/sell pressure, dan wash trading sebelum masuk.",
     ])
-    return f"<pre>{html_escape(chr(10).join(lines))}</pre>"
+    return "\n".join(lines)
 
 
 def get_chat_id():

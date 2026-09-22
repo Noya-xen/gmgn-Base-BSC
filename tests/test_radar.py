@@ -104,6 +104,37 @@ class RadarTests(unittest.TestCase):
         self.assertIn("--resolution", command)
         self.assertIn("15m", command)
 
+    def test_volume_alert_accepts_either_window_and_shows_both_statuses(self):
+        data = {
+            "volume_15m": 600_000,
+            "volume_1h": 800_000,
+            "spike_ratio": 3.0,
+            "change_15m": 5.0,
+        }
+        status = RADAR.volume_threshold_status(data)
+        self.assertEqual(status["status"], "15m")
+        self.assertTrue(status["pass_15m"])
+        self.assertFalse(status["pass_1h"])
+
+        match = {
+            "chain": "base",
+            "token": {
+                "symbol": "TEST",
+                "market_cap": 1_250_000,
+                "address": "0xabc",
+            },
+            "data": data,
+            **status,
+        }
+        report = RADAR.build_volume_report([match], ("base",))
+        self.assertIn("⚡ 15M PASS", report)
+        self.assertIn("MC: $1.2M", report)
+        self.assertIn("CA: <code>0xabc</code>", report)
+        self.assertNotIn("Chart GMGN", report)
+        self.assertIsNone(
+            RADAR.volume_threshold_status({"volume_15m": 1, "volume_1h": 1})
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
