@@ -56,7 +56,7 @@ RADAR_TIMEZONE = os.environ.get("RADAR_TIMEZONE", "UTC")
 RADAR_LOCATION = os.environ.get("RADAR_LOCATION", RADAR_TIMEZONE)
 # GMGN currently exposes the same market/token command family for these
 # chains. Keep the list in one place so operators can select any subset via
-# RADAR_CHAINS or --chains without changing the screening flow.
+# RADAR_CHAINS / VOLUME_CHAINS without changing the screening flow.
 SUPPORTED_CHAINS = (
     "sol", "bsc", "base", "eth", "arbitrum", "hyperevm",
     "robinhood", "arc", "stable",
@@ -134,7 +134,14 @@ def parse_chains(value):
     return requested
 
 
-CHAINS = parse_chains(os.environ.get("RADAR_CHAINS", ",".join(DEFAULT_CHAINS)))
+RADAR_CHAINS = parse_chains(
+    os.environ.get("RADAR_CHAINS", ",".join(DEFAULT_CHAINS))
+)
+VOLUME_CHAINS = parse_chains(
+    os.environ.get("VOLUME_CHAINS", ",".join(RADAR_CHAINS))
+)
+# Backward-compatible alias for integrations that imported CHAINS.
+CHAINS = RADAR_CHAINS
 
 
 def trend_command(chain):
@@ -443,9 +450,10 @@ def lp_score(m):
 def build_reports():
     from datetime import datetime, timezone
 
+    scan_chains = tuple(dict.fromkeys((*RADAR_CHAINS, *VOLUME_CHAINS)))
     hits_by_chain = {
         chain: [t for t in gather(trend_command(chain)) if safe_for_dlmm(t)]
-        for chain in CHAINS
+        for chain in scan_chains
     }
 
     def rank_key(t):
@@ -455,7 +463,7 @@ def build_reports():
 
     for hits in hits_by_chain.values():
         hits.sort(key=rank_key, reverse=True)
-    all_hits = [t for chain in CHAINS for t in hits_by_chain[chain]]
+    all_hits = [t for chain in RADAR_CHAINS for t in hits_by_chain[chain]]
     price_by_address = token_price_map(all_hits)
 
     def snapshot_for(t):
@@ -508,7 +516,7 @@ def build_reports():
                 ca = " ".join(str(t.get("address") or "-").split())
                 lines.extend([row, "CA:", ca])
 
-        for chain in CHAINS:
+        for chain in RADAR_CHAINS:
             add_section(chain_title(chain), hits_by_chain[chain])
 
         lines.extend([
@@ -533,7 +541,7 @@ def build_reports():
 
     def watch_report():
         lines = [f"<b>👀 WATCH — kandidat pantauan</b> · {local_time} {html_escape(RADAR_LOCATION)}", ""]
-        for chain in CHAINS:
+        for chain in RADAR_CHAINS:
             hits = hits_by_chain[chain]
             rows = []
             for t in hits:
@@ -560,7 +568,7 @@ def build_reports():
 
     def lp_report():
         lines = [f"<b>💧 LP — fee capture watchlist</b> · {local_time} {html_escape(RADAR_LOCATION)}", ""]
-        for chain in CHAINS:
+        for chain in RADAR_CHAINS:
             hits = hits_by_chain[chain]
             rows = []
             for t in hits:
@@ -601,10 +609,10 @@ def build_reports():
         "lp": lp_report(),
         "volume_candidates": {
             chain: (
-                hits[:VOLUME_SCAN_LIMIT]
-                if VOLUME_SCAN_LIMIT > 0 else hits
+                hits_by_chain[chain][:VOLUME_SCAN_LIMIT]
+                if VOLUME_SCAN_LIMIT > 0 else hits_by_chain[chain]
             )
-            for chain, hits in hits_by_chain.items()
+            for chain in VOLUME_CHAINS
         },
     }
 
@@ -635,14 +643,17 @@ def save_volume_state(state):
         print(f"volume-state=FAIL {exc}", file=sys.stderr)
 
 
-def scan_volume_spikes(candidates, deadline):
+def scan_volume_spikes(candidates, deadline, chains=None):
     """Scan candidates round-robin until the next radar slot is due."""
+    chains = tuple(chains or VOLUME_CHAINS)
+    if not chains:
+        return [], 0, False
     state = load_volume_state()
-    if not any(candidates.get(chain) for chain in CHAINS):
+    if not any(candidates.get(chain) for chain in chains):
         return [], 0, False
 
     try:
-        next_chain = int(state.get("next_chain", 0)) % len(CHAINS)
+        next_chain = int(state.get("next_chain", 0)) % len(chains)
     except (TypeError, ValueError):
         next_chain = 0
     token_indices = state.get("token_indices", {})
@@ -661,12 +672,12 @@ def scan_volume_spikes(candidates, deadline):
 
     try:
         while time.monotonic() < deadline:
-            chain = CHAINS[next_chain]
+            chain = chains[next_chain]
             hits = candidates.get(chain, [])
             if not hits:
                 empty_chains += 1
-                next_chain = (next_chain + 1) % len(CHAINS)
-                if empty_chains >= len(CHAINS):
+                next_chain = (next_chain + 1) % len(chains)
+                if empty_chains >= len(chains):
                     break
                 continue
 
@@ -677,7 +688,7 @@ def scan_volume_spikes(candidates, deadline):
                 token_index = 0
             token = hits[token_index]
             token_indices[chain] = (token_index + 1) % len(hits)
-            next_chain = (next_chain + 1) % len(CHAINS)
+            next_chain = (next_chain + 1) % len(chains)
 
             remaining = deadline - time.monotonic()
             if remaining <= 1:
@@ -715,7 +726,7 @@ def scan_volume_spikes(candidates, deadline):
     return matches, scanned, preempted
 
 
-def build_volume_report(matches):
+def build_volume_report(matches, chains=None):
     """Build a Signal-style board containing only volume spike matches."""
     from datetime import datetime, timezone
 
@@ -724,12 +735,13 @@ def build_volume_report(matches):
     except ZoneInfoNotFoundError:
         local_tz = timezone.utc
     local_time = datetime.now(local_tz).strftime("%H:%M")
-    by_chain = {chain: [] for chain in CHAINS}
+    chains = tuple(chains or VOLUME_CHAINS)
+    by_chain = {chain: [] for chain in chains}
     for match in matches:
         by_chain.setdefault(match["chain"], []).append(match)
 
     lines = [f"GMGN VOLUME SPIKE — {local_time} {RADAR_LOCATION}", ""]
-    for chain in CHAINS:
+    for chain in chains:
         lines.extend([chain_title(chain), "SYM      V15    V1H   SPIKE  Δ15M", "-" * 42])
         rows = by_chain.get(chain, [])
         if not rows:
@@ -848,13 +860,16 @@ def print_credit():
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="GMGN V/L radar for selected GMGN chains")
+    parser = argparse.ArgumentParser(
+        description="GMGN radar with independent radar and volume chain lists"
+    )
     parser.add_argument(
         "--chains",
-        help=(
-            "One or more comma-separated chains (overrides RADAR_CHAINS): "
-            + ",".join(SUPPORTED_CHAINS)
-        ),
+        help="Radar/SIGNAL chains (overrides RADAR_CHAINS)",
+    )
+    parser.add_argument(
+        "--volume-chains",
+        help="Volume SPIKE chains (overrides VOLUME_CHAINS)",
     )
     return parser.parse_args()
 
@@ -863,7 +878,12 @@ if __name__ == "__main__":
     cycle_started = time.monotonic()
     args = parse_args()
     if args.chains:
-        CHAINS = parse_chains(args.chains)
+        RADAR_CHAINS = parse_chains(args.chains)
+        CHAINS = RADAR_CHAINS
+        if not args.volume_chains and "VOLUME_CHAINS" not in os.environ:
+            VOLUME_CHAINS = RADAR_CHAINS
+    if args.volume_chains:
+        VOLUME_CHAINS = parse_chains(args.volume_chains)
     print_credit()
     reports = build_reports()
     cid = get_chat_id()
@@ -889,14 +909,14 @@ if __name__ == "__main__":
         0, RADAR_INTERVAL_SECONDS - VOLUME_SAFETY_SECONDS
     )
     matches, scanned, preempted = scan_volume_spikes(
-        reports["volume_candidates"], volume_deadline
+        reports["volume_candidates"], volume_deadline, VOLUME_CHAINS
     )
     print(
         f"volume=scanned({scanned}) matches({len(matches)}) "
         f"preempted({str(preempted).lower()})"
     )
     if matches:
-        volume_report = build_volume_report(matches)
+        volume_report = build_volume_report(matches, VOLUME_CHAINS)
         if cid and VOLUME_THREAD_ID:
             try:
                 parts_sent = send_report(volume_report, cid, VOLUME_THREAD_ID)

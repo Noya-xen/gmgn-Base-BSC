@@ -1,6 +1,7 @@
 {
   "chain_scope": ["sol", "bsc", "base", "eth", "arbitrum", "hyperevm", "robinhood", "arc", "stable"],
-  "default_selected_chains": ["bsc", "base"],
+  "default_radar_chains": ["bsc", "base"],
+  "default_volume_chains": ["bsc", "base"],
   "interval": "1h",
   "limit": 100,
   "order_by": "volume",
