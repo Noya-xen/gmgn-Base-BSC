@@ -75,7 +75,7 @@ VOLUME_CHAINS=arc,eth,arbitrum
 
 `RADAR_CHAINS` hanya dipakai SIGNAL/WATCH, sedangkan `VOLUME_CHAINS` hanya dipakai VOLUME SPIKE. `TG_SIGNAL_THREAD_ID` mengatur topic SIGNAL, `TG_SEND_WATCH_THREAD_ID` mengatur topic WATCH, dan `TG_VOLUME_THREAD_ID` mengatur topic VOLUME SPIKE. `TG_SEND_WATCH=1` mengaktifkan Watch; ubah menjadi `0` jika hanya ingin Signal. `RADAR_TIMEZONE` memakai nama IANA, misalnya `Asia/Jakarta`.
 
-Scan tetap dipicu setiap lima menit. Dalam setiap siklus, SIGNAL dan WATCH diproses lebih dulu. Detail analisis SIGNAL dibatasi ke 10 kandidat teratas per chain agar request GMGN tidak berlebihan. Setelah SIGNAL/WATCH selesai, script menunggu cooldown `VOLUME_START_DELAY_SECONDS` (default 60 detik) sebelum memulai volume. Volume memakai sisa waktu sampai jadwal berikutnya; jika belum selesai, cursor disimpan di `~/.config/gmgn-bsc-base-radar/volume-state.json` lalu dilanjutkan pada siklus berikutnya. Jika cooldown tidak menyisakan waktu yang cukup, volume dilewati dan SIGNAL tetap diprioritaskan.
+Scan tetap dipicu setiap lima menit. Dalam setiap siklus, SIGNAL dan WATCH berjalan dengan alur sebelumnya. Volume memakai sisa waktu sampai jadwal berikutnya; jika belum selesai, cursor disimpan di `~/.config/gmgn-bsc-base-radar/volume-state.json` lalu dilanjutkan pada siklus berikutnya.
 
 Threshold awal volume:
 
@@ -85,6 +85,15 @@ V1H >= 1M
 ```
 
 Alert dikirim jika `V15` atau `V1H` memenuhi threshold. Keduanya tetap ditampilkan dengan status `PASS` atau `belum memenuhi`. `SPIKE` dihitung sebagai `V15 / (V1H / 4)` dan hanya ditampilkan sebagai informasi tambahan. Threshold tersebut dianggap memakai satuan volume yang dikembalikan GMGN CLI; verifikasi output raw terlebih dahulu sebelum menganggapnya sebagai USD.
+
+Volume hanya mengambil K-line token dengan market cap:
+
+```text
+minimum: 500k
+maximum: 50M
+```
+
+Token di luar rentang tersebut tidak diproses untuk volume.
 
 ## Jalankan lokal
 

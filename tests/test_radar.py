@@ -135,6 +135,12 @@ class RadarTests(unittest.TestCase):
             RADAR.volume_threshold_status({"volume_15m": 1, "volume_1h": 1})
         )
 
+    def test_volume_market_cap_band(self):
+        self.assertFalse(RADAR.volume_market_cap_ok({"market_cap": 499_999}))
+        self.assertTrue(RADAR.volume_market_cap_ok({"market_cap": 500_000}))
+        self.assertTrue(RADAR.volume_market_cap_ok({"market_cap": 50_000_000}))
+        self.assertFalse(RADAR.volume_market_cap_ok({"market_cap": 50_000_001}))
+
 
 if __name__ == "__main__":
     unittest.main()
