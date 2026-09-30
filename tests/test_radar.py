@@ -41,6 +41,15 @@ class RadarTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             RADAR.parse_chains("sol,unknown")
 
+    def test_gather_attaches_chain_for_detail_requests(self):
+        original_run = RADAR.run
+        try:
+            RADAR.run = lambda command: {"data": {"rank": [{"symbol": "PEPE"}]}}
+            rows = RADAR.gather("ignored", chain="bsc")
+        finally:
+            RADAR.run = original_run
+        self.assertEqual(rows[0]["chain"], "bsc")
+
     def test_money_formatting(self):
         self.assertEqual(RADAR.money(1_250_000), "1.2M")
         self.assertEqual(RADAR.money(12_500), "12k")
@@ -53,6 +62,7 @@ class RadarTests(unittest.TestCase):
     def test_stock_filter_only_rejects_the_candidate_token(self):
         self.assertTrue(RADAR.is_stock_token({"symbol": "NVDA", "name": "NVIDIA"}))
         self.assertTrue(RADAR.is_stock_token({"symbol": "TSLAx", "name": "Tesla xStock"}))
+        self.assertTrue(RADAR.is_stock_token({"symbol": "GSTOCK", "name": ""}))
         self.assertTrue(RADAR.is_stock_token({"symbol": "ABC", "name": "ABC tokenized stock"}))
         self.assertFalse(
             RADAR.is_stock_token({

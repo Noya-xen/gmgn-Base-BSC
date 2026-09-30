@@ -216,11 +216,17 @@ def run(cmd):
         return {}
 
 
-def gather(cmd=BSC_CMD):
+def gather(cmd=BSC_CMD, chain=None):
     tr = run(cmd)
     if isinstance(tr, dict):
         rank = tr.get("data", {}).get("rank", [])
         if isinstance(rank, list):
+            if chain:
+                for token in rank:
+                    if isinstance(token, dict):
+                        # Trending rows do not consistently include chain.
+                        # Detail requests need it for token info and K-lines.
+                        token.setdefault("chain", chain)
             return rank
     return []
 
@@ -239,7 +245,11 @@ def is_stock_token(t):
     symbol = str(t.get("symbol") or "").strip()
     name = str(t.get("name") or "").strip()
     symbol_key = re.sub(r"[^A-Z0-9.]", "", symbol.upper())
-    if symbol_key in STOCK_SYMBOLS or STOCK_SUFFIX_RE.fullmatch(symbol_key):
+    if (
+        symbol_key in STOCK_SYMBOLS
+        or symbol_key.endswith("STOCK")
+        or STOCK_SUFFIX_RE.fullmatch(symbol_key)
+    ):
         return True
     return bool(STOCK_NAME_RE.search(name))
 
@@ -544,7 +554,10 @@ def build_reports():
 
     scan_chains = tuple(dict.fromkeys((*RADAR_CHAINS, *VOLUME_CHAINS)))
     eligible_by_chain = {
-        chain: [t for t in gather(trend_command(chain)) if signal_candidate_ok(t)]
+        chain: [
+            t for t in gather(trend_command(chain), chain=chain)
+            if signal_candidate_ok(t)
+        ]
         for chain in scan_chains
     }
 
