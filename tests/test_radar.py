@@ -50,6 +50,24 @@ class RadarTests(unittest.TestCase):
         self.assertTrue(RADAR.safe_for_dlmm({"symbol": "OK"}))
         self.assertFalse(RADAR.safe_for_dlmm({"is_wash_trading": True}))
 
+    def test_stock_filter_only_rejects_the_candidate_token(self):
+        self.assertTrue(RADAR.is_stock_token({"symbol": "NVDA", "name": "NVIDIA"}))
+        self.assertTrue(RADAR.is_stock_token({"symbol": "TSLAx", "name": "Tesla xStock"}))
+        self.assertTrue(RADAR.is_stock_token({"symbol": "ABC", "name": "ABC tokenized stock"}))
+        self.assertFalse(
+            RADAR.is_stock_token({
+                "symbol": "PEPE",
+                "name": "Pepe meme",
+                "quote_symbol": "TSLA",
+                "pair_symbol": "PEPE/TSLA",
+            })
+        )
+
+    def test_signal_candidate_market_cap_and_stock_filters(self):
+        self.assertTrue(RADAR.signal_candidate_ok({"symbol": "PEPE", "market_cap": 50_000_000}))
+        self.assertFalse(RADAR.signal_candidate_ok({"symbol": "PEPE", "market_cap": 50_000_001}))
+        self.assertFalse(RADAR.signal_candidate_ok({"symbol": "NVDA", "market_cap": 1_000_000}))
+
     def test_split_message_preserves_pre_tag(self):
         chunks = RADAR.split_message("<pre>one\ntwo\nthree</pre>", limit=4)
         self.assertTrue(all(chunk.startswith("<pre>") and chunk.endswith("</pre>") for chunk in chunks))

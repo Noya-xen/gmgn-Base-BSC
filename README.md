@@ -30,6 +30,10 @@ BSC, Base, Arc, dan chain GMGN lain memakai pola command market yang sama sepert
 - minimum market cap: `$100,000`
 - tidak memakai `min-gas-fee` karena gate ini tidak dibandingkan lintas chain
 - token yang ditandai wash trading tetap dibuang secara lokal
+- token saham/tokenized equity dibuang berdasarkan identitas tokennya sendiri
+- meme coin tetap diproses walaupun pair/quote asset di pool-nya berkaitan dengan saham
+- Signal memproses maksimal 50 kandidat per chain setelah filter lokal
+- Signal dan Volume mengabaikan market cap di atas `$50M`
 
 Perhitungan scoring dan format report Telegram tetap sama. Link chart otomatis menggunakan format GMGN `/kline/{chain}/{address}`.
 

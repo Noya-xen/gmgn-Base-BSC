@@ -4,6 +4,7 @@
 import json
 import os
 import argparse
+import re
 import subprocess
 import sys
 import time
@@ -63,6 +64,35 @@ SUPPORTED_CHAINS = (
 )
 DEFAULT_CHAINS = ("bsc", "base")
 LIMIT = 100
+SIGNAL_TOKEN_LIMIT = int(os.environ.get("SIGNAL_TOKEN_LIMIT", "50"))
+SIGNAL_MAX_MARKET_CAP = float(
+    os.environ.get("SIGNAL_MAX_MARKET_CAP", "50000000")
+)
+
+# GMGN can list tokenized equities alongside meme coins. This filter only
+# inspects the candidate token's own symbol/name. It intentionally does not
+# inspect pair, quote, or pool fields, so a meme token paired with a stock
+# asset remains eligible for Signal and Volume.
+DEFAULT_STOCK_SYMBOLS = frozenset({
+    "AAPL", "ABT", "ADBE", "AMD", "AMZN", "AVGO", "BA", "BAC", "BRK.B",
+    "COIN", "COST", "CRM", "CSCO", "DIS", "GOOG", "GOOGL", "HD", "INTC",
+    "JNJ", "JPM", "KO", "LLY", "MA", "MCD", "META", "MRK", "MSFT", "MSTR",
+    "NFLX", "NKE", "NVDA", "ORCL", "PFE", "PLTR", "PYPL", "QQQ", "SPY",
+    "TMO", "TSLA", "TSM", "UNH", "V", "VTI", "WMT", "XOM",
+})
+STOCK_SYMBOLS = frozenset(
+    item.strip().upper()
+    for item in os.environ.get("STOCK_TOKEN_SYMBOLS", "").split(",")
+    if item.strip()
+) or DEFAULT_STOCK_SYMBOLS
+STOCK_NAME_RE = re.compile(
+    r"\b(?:stock|stocks|equity|equities|share|shares|tokenized|tokenised|xstock)\b",
+    re.IGNORECASE,
+)
+STOCK_SUFFIX_RE = re.compile(
+    r"^(?:" + "|".join(re.escape(symbol) for symbol in STOCK_SYMBOLS) + r")(?:X|XSTOCK|STOCK)$",
+    re.IGNORECASE,
+)
 
 # The existing systemd/Hermes schedule starts a fresh run every five minutes.
 # Signal/Watch keep priority; volume scanning is allowed to use only the
@@ -198,6 +228,38 @@ def gather(cmd=BSC_CMD):
 def safe_for_dlmm(t):
     """Reject rows that GMGN explicitly marks as wash trading."""
     return t.get("is_wash_trading") is not True
+
+
+def is_stock_token(t):
+    """Return True only when the candidate itself looks like an equity token.
+
+    Pair/quote/pool fields are deliberately ignored. That preserves meme
+    tokens whose liquidity pool happens to use a stock-like quote asset.
+    """
+    symbol = str(t.get("symbol") or "").strip()
+    name = str(t.get("name") or "").strip()
+    symbol_key = re.sub(r"[^A-Z0-9.]", "", symbol.upper())
+    if symbol_key in STOCK_SYMBOLS or STOCK_SUFFIX_RE.fullmatch(symbol_key):
+        return True
+    return bool(STOCK_NAME_RE.search(name))
+
+
+def signal_market_cap_ok(t):
+    """Keep Signal candidates at or below the configured market cap ceiling."""
+    try:
+        market_cap = float(t.get("market_cap") or 0)
+    except (TypeError, ValueError):
+        market_cap = 0
+    return market_cap <= SIGNAL_MAX_MARKET_CAP
+
+
+def signal_candidate_ok(t):
+    """Apply local Signal/Volume exclusions without changing GMGN gates."""
+    return (
+        safe_for_dlmm(t)
+        and not is_stock_token(t)
+        and signal_market_cap_ok(t)
+    )
 
 
 def token_price_data(t):
@@ -481,8 +543,8 @@ def build_reports():
     from datetime import datetime, timezone
 
     scan_chains = tuple(dict.fromkeys((*RADAR_CHAINS, *VOLUME_CHAINS)))
-    hits_by_chain = {
-        chain: [t for t in gather(trend_command(chain)) if safe_for_dlmm(t)]
+    eligible_by_chain = {
+        chain: [t for t in gather(trend_command(chain)) if signal_candidate_ok(t)]
         for chain in scan_chains
     }
 
@@ -491,9 +553,16 @@ def build_reports():
         liq = float(t.get("liquidity") or 0)
         return (vol / liq if liq > 0 else 0, vol)
 
-    for hits in hits_by_chain.values():
+    for hits in eligible_by_chain.values():
         hits.sort(key=rank_key, reverse=True)
-    all_hits = [t for chain in RADAR_CHAINS for t in hits_by_chain[chain]]
+    signal_hits_by_chain = {
+        chain: (
+            hits[:SIGNAL_TOKEN_LIMIT]
+            if SIGNAL_TOKEN_LIMIT > 0 else hits
+        )
+        for chain, hits in eligible_by_chain.items()
+    }
+    all_hits = [t for chain in RADAR_CHAINS for t in signal_hits_by_chain[chain]]
     price_by_address = token_price_map(all_hits)
 
     def snapshot_for(t):
@@ -536,7 +605,7 @@ def build_reports():
             lines.extend([title, "SYM      V/L  S1H  S5M  S×    MC    FLOW", "-" * 49])
             if not hits:
                 lines.append("none")
-            for t in hits[:10]:
+            for t in hits:
                 m = metric(t)
                 row = (
                     f"{(t.get('symbol') or '?')[:7]:<7} {m['vl']:>4.1f} "
@@ -547,7 +616,7 @@ def build_reports():
                 lines.extend([row, "CA:", ca])
 
         for chain in RADAR_CHAINS:
-            add_section(chain_title(chain), hits_by_chain[chain])
+            add_section(chain_title(chain), signal_hits_by_chain[chain])
 
         lines.extend([
             "",
@@ -572,7 +641,7 @@ def build_reports():
     def watch_report():
         lines = [f"<b>👀 WATCH — kandidat pantauan</b> · {local_time} {html_escape(RADAR_LOCATION)}", ""]
         for chain in RADAR_CHAINS:
-            hits = hits_by_chain[chain]
+            hits = signal_hits_by_chain[chain]
             rows = []
             for t in hits:
                 m = metric(t)
@@ -599,7 +668,7 @@ def build_reports():
     def lp_report():
         lines = [f"<b>💧 LP — fee capture watchlist</b> · {local_time} {html_escape(RADAR_LOCATION)}", ""]
         for chain in RADAR_CHAINS:
-            hits = hits_by_chain[chain]
+            hits = signal_hits_by_chain[chain]
             rows = []
             for t in hits:
                 m = metric(t)
@@ -639,9 +708,15 @@ def build_reports():
         "lp": lp_report(),
         "volume_candidates": {
             chain: (
-                [t for t in hits_by_chain[chain] if volume_market_cap_ok(t)][:VOLUME_SCAN_LIMIT]
+                [
+                    t for t in eligible_by_chain[chain]
+                    if volume_market_cap_ok(t) and not is_stock_token(t)
+                ][:VOLUME_SCAN_LIMIT]
                 if VOLUME_SCAN_LIMIT > 0
-                else [t for t in hits_by_chain[chain] if volume_market_cap_ok(t)]
+                else [
+                    t for t in eligible_by_chain[chain]
+                    if volume_market_cap_ok(t) and not is_stock_token(t)
+                ]
             )
             for chain in VOLUME_CHAINS
         },
