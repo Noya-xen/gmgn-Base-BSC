@@ -98,6 +98,9 @@ STOCK_SUFFIX_RE = re.compile(
 # Signal/Watch keep priority; volume scanning is allowed to use only the
 # remaining part of that five-minute slot and resumes from saved state.
 RADAR_INTERVAL_SECONDS = int(os.environ.get("RADAR_INTERVAL_SECONDS", "300"))
+ENABLE_VOLUME_SCAN = os.environ.get("ENABLE_VOLUME_SCAN", "1").strip().lower() not in {
+    "0", "false", "no", "off"
+}
 VOLUME_SAFETY_SECONDS = int(os.environ.get("VOLUME_SAFETY_SECONDS", "10"))
 VOLUME_SCAN_LIMIT = int(os.environ.get("VOLUME_SCAN_LIMIT", "100"))
 VOLUME_MIN_MARKET_CAP = float(
@@ -172,8 +175,9 @@ def parse_chains(value):
 RADAR_CHAINS = parse_chains(
     os.environ.get("RADAR_CHAINS", ",".join(DEFAULT_CHAINS))
 )
-VOLUME_CHAINS = parse_chains(
-    os.environ.get("VOLUME_CHAINS", ",".join(RADAR_CHAINS))
+VOLUME_CHAINS = (
+    parse_chains(os.environ.get("VOLUME_CHAINS", ",".join(RADAR_CHAINS)))
+    if ENABLE_VOLUME_SCAN else ()
 )
 # Backward-compatible alias for integrations that imported CHAINS.
 CHAINS = RADAR_CHAINS
@@ -306,8 +310,22 @@ def flow_5m(t, price_data=None):
     address = t.get("address")
     chain = t.get("chain")
     vol_1h = float(t.get("volume") or 0)
+
+    # Keep transaction metrics independently from the K-line request. GMGN
+    # can return token info successfully while a 1m K-line request is empty,
+    # rate-limited, or temporarily unavailable.
+    price_data = price_data or token_price_data(t) or {}
+    swaps_5m = int(float(price_data.get("swaps_5m") or t.get("swaps_5m") or 0))
+    swaps_1h = float(
+        price_data.get("swaps_1h")
+        or t.get("swaps_1h")
+        or t.get("swaps")
+        or 0
+    )
+    swap_speed = (swaps_5m * 12 / swaps_1h) if swaps_1h > 0 else None
+
     if not address or not chain or vol_1h <= 0:
-        return None, "-", 0, 0, None
+        return None, "-", int(swaps_1h), swaps_5m, swap_speed
     now = int(time.time())
     cmd = [
         "gmgn-cli", "market", "kline", "--chain", chain,
@@ -318,20 +336,15 @@ def flow_5m(t, price_data=None):
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=25).stdout
         candles = json.loads(out).get("list", [])[-5:]
         if not candles:
-            return None, "-", 0, 0, None
+            return None, "-", int(swaps_1h), swaps_5m, swap_speed
         vol_5m = sum(float(c.get("volume") or 0) for c in candles)
         ratio = (vol_5m * 12) / vol_1h
         open_5m = float(candles[0].get("open") or 0)
         close_5m = float(candles[-1].get("close") or 0)
         price_change_5m = ((close_5m / open_5m) - 1) if open_5m > 0 else 0
 
-        # Reuse the full-universe snapshot when available.
-        price_data = price_data or token_price_data(t) or {}
         buy_vol_5m = float(price_data.get("buy_volume_5m") or 0)
         sell_vol_5m = float(price_data.get("sell_volume_5m") or 0)
-        swaps_5m = int(float(price_data.get("swaps_5m") or 0))
-        swaps_1h = float(price_data.get("swaps_1h") or t.get("swaps") or 0)
-        swap_speed = (swaps_5m * 12 / swaps_1h) if swaps_1h > 0 else None
 
         # Require price and directional volume to agree. A 5% margin prevents
         # tiny buy/sell differences from being mislabeled directional.
@@ -352,7 +365,7 @@ def flow_5m(t, price_data=None):
             icon = "🧊"
         return ratio, f"{icon}{direction}{ratio:.1f}", int(swaps_1h), swaps_5m, swap_speed
     except Exception:
-        return None, "-", 0, 0, None
+        return None, "-", int(swaps_1h), swaps_5m, swap_speed
 
 
 def volume_spike_data(t, chain, timeout=20):
@@ -1037,6 +1050,7 @@ if __name__ == "__main__":
         if not args.volume_chains and "VOLUME_CHAINS" not in os.environ:
             VOLUME_CHAINS = RADAR_CHAINS
     if args.volume_chains:
+        ENABLE_VOLUME_SCAN = True
         VOLUME_CHAINS = parse_chains(args.volume_chains)
     print_credit()
     reports = build_reports()
@@ -1059,26 +1073,29 @@ if __name__ == "__main__":
         except Exception as exc:
             print(f"telegram=FAIL {exc}")
 
-    volume_deadline = cycle_started + max(
-        0, RADAR_INTERVAL_SECONDS - VOLUME_SAFETY_SECONDS
-    )
-    matches, scanned, preempted = scan_volume_spikes(
-        reports["volume_candidates"], volume_deadline, VOLUME_CHAINS
-    )
-    print(
-        f"volume=scanned({scanned}) matches({len(matches)}) "
-        f"preempted({str(preempted).lower()})"
-    )
-    if matches:
-        volume_report = build_volume_report(matches, VOLUME_CHAINS)
-        if cid and VOLUME_THREAD_ID:
-            try:
-                parts_sent = send_report(volume_report, cid, VOLUME_THREAD_ID)
-                print(f"volume=sent({parts_sent} msg)")
-            except Exception as exc:
-                print(f"volume=FAIL {exc}")
-        elif cid:
-            print("volume=SKIP TG_VOLUME_THREAD_ID is not configured", file=sys.stderr)
-            print(f"\n--- VOLUME SPIKE ---\n{volume_report}")
-        else:
-            print(f"\n--- VOLUME SPIKE ---\n{volume_report}")
+    if not ENABLE_VOLUME_SCAN:
+        print("volume=disabled")
+    else:
+        volume_deadline = cycle_started + max(
+            0, RADAR_INTERVAL_SECONDS - VOLUME_SAFETY_SECONDS
+        )
+        matches, scanned, preempted = scan_volume_spikes(
+            reports["volume_candidates"], volume_deadline, VOLUME_CHAINS
+        )
+        print(
+            f"volume=scanned({scanned}) matches({len(matches)}) "
+            f"preempted({str(preempted).lower()})"
+        )
+        if matches:
+            volume_report = build_volume_report(matches, VOLUME_CHAINS)
+            if cid and VOLUME_THREAD_ID:
+                try:
+                    parts_sent = send_report(volume_report, cid, VOLUME_THREAD_ID)
+                    print(f"volume=sent({parts_sent} msg)")
+                except Exception as exc:
+                    print(f"volume=FAIL {exc}")
+            elif cid:
+                print("volume=SKIP TG_VOLUME_THREAD_ID is not configured", file=sys.stderr)
+                print(f"\n--- VOLUME SPIKE ---\n{volume_report}")
+            else:
+                print(f"\n--- VOLUME SPIKE ---\n{volume_report}")

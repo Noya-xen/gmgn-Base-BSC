@@ -50,6 +50,23 @@ class RadarTests(unittest.TestCase):
             RADAR.run = original_run
         self.assertEqual(rows[0]["chain"], "bsc")
 
+    def test_flow_keeps_swap_metrics_when_kline_is_unavailable(self):
+        fake = SimpleNamespace(stdout=json.dumps({"list": []}))
+        with patch.object(RADAR.subprocess, "run", return_value=fake):
+            with patch.object(
+                RADAR,
+                "token_price_data",
+                return_value={"swaps_1h": 120, "swaps_5m": 10},
+            ):
+                result = RADAR.flow_5m({
+                    "address": "0xabc",
+                    "chain": "bsc",
+                    "volume": 1_000_000,
+                })
+        self.assertEqual(result[2], 120)
+        self.assertEqual(result[3], 10)
+        self.assertAlmostEqual(result[4], 1.0)
+
     def test_money_formatting(self):
         self.assertEqual(RADAR.money(1_250_000), "1.2M")
         self.assertEqual(RADAR.money(12_500), "12k")

@@ -81,6 +81,14 @@ VOLUME_CHAINS=arc,eth,arbitrum
 
 Scan tetap dipicu setiap lima menit. Dalam setiap siklus, SIGNAL dan WATCH berjalan dengan alur sebelumnya. Volume memakai sisa waktu sampai jadwal berikutnya; jika belum selesai, cursor disimpan di `~/.config/gmgn-bsc-base-radar/volume-state.json` lalu dilanjutkan pada siklus berikutnya.
 
+Untuk menjalankan SIGNAL/WATCH saja tanpa request Volume, gunakan:
+
+```env
+ENABLE_VOLUME_SCAN=0
+```
+
+Saat K-line 1m tidak tersedia, metrik transaksi `S1H`, `S5M`, dan `S×` tetap memakai data `token info` GMGN jika tersedia.
+
 Threshold awal volume:
 
 ```text
